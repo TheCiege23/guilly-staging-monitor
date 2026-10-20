@@ -14024,6 +14024,7 @@ async function getGuillotineConfig(leagueId) {
     return {
       leagueId: row.leagueId,
       sport,
+      firstSeasonWeek: Number(league.settings?.redraft_start_week ?? 1),
       eliminationStartWeek: row.eliminationStartWeek,
       eliminationEndWeek: row.eliminationEndWeek,
       teamsPerChop: row.teamsPerChop,
@@ -14044,6 +14045,7 @@ async function getGuillotineConfig(leagueId) {
   return {
     leagueId: league.id,
     sport,
+    firstSeasonWeek: Number(league.settings?.redraft_start_week ?? 1),
     eliminationStartWeek: settings.eliminationStartWeek ?? 1,
     eliminationEndWeek: settings.eliminationEndWeek ?? defaultEndWeek,
     teamsPerChop: settings.teamsPerChop ?? 1,
@@ -19874,8 +19876,8 @@ var import_strict2 = __toESM(require("node:assert/strict"));
 var import_node_http = require("node:http");
 var import_node_crypto4 = require("node:crypto");
 
-// tmp/guilly-staging/forward-fixture.json
-var forward_fixture_default = {
+// tmp/guilly-hosted-fixture.json
+var guilly_hosted_fixture_default = {
   tag: "guilly-auto-c8cb0059",
   databaseHost: "ep-winter-salad-ad34lce8-pooler.c-2.us-east-1.aws.neon.tech",
   leagues: {
@@ -19910,6 +19912,39 @@ var forward_fixture_default = {
       firstWeek: 1,
       realPlayers: true,
       historyCapturedAt: "2026-10-20T18:55:55.530Z"
+    },
+    "NFL-4": {
+      leagueId: "81da7908-0e5b-4ebc-b3d7-25eaca07d133",
+      seasonId: "cmvh3raj10002ci1blt1q5937",
+      season: 2026,
+      firstWeek: 7,
+      initialTeams: 4,
+      sport: "NFL",
+      tag: "guilly-auto-7222c886",
+      realPlayers: true,
+      historyCapturedAt: "2026-10-20T19:55:00.432Z"
+    },
+    "NBA-4": {
+      leagueId: "d7ef74b8-0a97-467f-8d2c-f14020b28f10",
+      seasonId: "cmvh3rbce000tci1bbx4v37cf",
+      season: 2026,
+      firstWeek: 2,
+      initialTeams: 4,
+      sport: "NBA",
+      tag: "guilly-auto-7222c886",
+      realPlayers: true,
+      historyCapturedAt: "2026-10-20T19:55:01.158Z"
+    },
+    "NHL-4": {
+      leagueId: "803f3503-bbe3-43c1-aed8-15bc7381db29",
+      seasonId: "cmvh3rbsx001kci1bx9opyx8i",
+      season: 2026,
+      firstWeek: 4,
+      initialTeams: 4,
+      sport: "NHL",
+      tag: "guilly-auto-7222c886",
+      realPlayers: true,
+      historyCapturedAt: "2026-10-20T19:55:01.758Z"
     }
   }
 };
@@ -19926,12 +19961,14 @@ function verifyPeriod(input) {
   import_strict.default.ok(input.cutScores.every((cut) => input.survivorScores.every((safe) => cut <= safe)), "Higher scorer incorrectly eliminated");
 }
 function verifyCompletion(input) {
-  import_strict.default.equal(input.eliminated, 7);
+  const total = input.initialTeams ?? 8;
+  import_strict.default.ok(Number.isInteger(total) && total >= 4, "Invalid starting team count");
+  import_strict.default.equal(input.eliminated, total - 1);
   import_strict.default.equal(input.survivors, 1);
   import_strict.default.ok(input.complete && input.championMatches, "Winner not recorded");
   import_strict.default.equal(input.playoffBrackets, 0);
-  import_strict.default.ok(input.periodCuts.includes(2), "Double chop not observed");
-  import_strict.default.equal(input.periodCuts.reduce((a, b) => a + b, 0), 7, "Incomplete period evidence");
+  if (input.requireDoubleChop !== false) import_strict.default.ok(input.periodCuts.includes(2), "Double chop not observed");
+  import_strict.default.equal(input.periodCuts.reduce((a, b) => a + b, 0), total - 1, "Incomplete period evidence");
   import_strict.default.equal(input.verifiedWaivers, input.periodCuts.length - 1, "Missing survivor waiver evidence");
 }
 
@@ -19941,9 +19978,9 @@ var FIVE_MINUTES = 3e5;
 var fingerprint = (s) => (0, import_node_crypto4.createHash)("sha256").update(s).digest("hex").slice(0, 24);
 function guard() {
   import_strict2.default.equal(process.env.GUILLY_HOSTED_STAGING, "true", "Dedicated staging mode required");
-  import_strict2.default.equal(new URL(process.env.DATABASE_URL).hostname, forward_fixture_default.databaseHost, "Staging database mismatch");
-  import_strict2.default.equal(new URL(process.env.DIRECT_URL).hostname, forward_fixture_default.databaseHost, "Direct database mismatch");
-  import_strict2.default.equal(Object.keys(forward_fixture_default.leagues).sort().join(","), "MLB,NBA,NFL,NHL");
+  import_strict2.default.equal(new URL(process.env.DATABASE_URL).hostname, guilly_hosted_fixture_default.databaseHost, "Staging database mismatch");
+  import_strict2.default.equal(new URL(process.env.DIRECT_URL).hostname, guilly_hosted_fixture_default.databaseHost, "Direct database mismatch");
+  import_strict2.default.equal([...new Set(Object.entries(guilly_hosted_fixture_default.leagues).map(([key, target]) => target.sport || key))].sort().join(","), "MLB,NBA,NFL,NHL");
   import_strict2.default.ok(process.env.RESEND_API_KEY && process.env.GUILLY_ALERT_TO && process.env.RESEND_FROM, "Alert delivery configuration required");
   import_strict2.default.ok(process.env.GUILLY_STATUS_TOKEN && process.env.GUILLY_STATUS_TOKEN.length >= 32, "Private status token required");
 }
@@ -20001,7 +20038,7 @@ Time: ${(/* @__PURE__ */ new Date()).toISOString()}`
   checkpoint.deliveries[key] = { id: receipt.id, kind, acceptedAt: checkpoint.alerts[key] };
   console.log(JSON.stringify({ event: "alert_accepted", kind }));
 }
-async function checkSport(sport, target, refresh) {
+async function checkSport(sport, target, refresh, stateKey = sport) {
   const { resolveSeasonWeekForRedraftSeason: resolveSeasonWeekForRedraftSeason2 } = await Promise.resolve().then(() => (init_season_week(), season_week_exports));
   const { syncPlayerWeeklyScoresForRedraftSeason: syncPlayerWeeklyScoresForRedraftSeason2 } = await Promise.resolve().then(() => (init_playerWeeklyScoreService(), playerWeeklyScoreService_exports));
   const { runNativeGuillotineWeek: runNativeGuillotineWeek2 } = await Promise.resolve().then(() => (init_nativeGuillotineWeek(), nativeGuillotineWeek_exports));
@@ -20010,15 +20047,18 @@ async function checkSport(sport, target, refresh) {
   const { getGuillotineConfig: getGuillotineConfig2 } = await Promise.resolve().then(() => (init_GuillotineLeagueConfig(), GuillotineLeagueConfig_exports));
   const { leagueId, seasonId, season } = target;
   const league = await db.league.findUniqueOrThrow({ where: { id: leagueId } });
-  import_strict2.default.ok(league.name?.includes(forward_fixture_default.tag), "QA league ownership mismatch");
+  import_strict2.default.ok(league.name?.includes(target.tag || guilly_hosted_fixture_default.tag), "QA league ownership mismatch");
   const shell = await db.redraftSeason.findUniqueOrThrow({ where: { id: seasonId } });
   import_strict2.default.equal(shell.leagueId, leagueId);
   import_strict2.default.equal(shell.season, season);
   import_strict2.default.equal(shell.sport, sport);
+  const initialTeams = target.initialTeams ?? 8;
+  import_strict2.default.equal(league.leagueSize, initialTeams, "Starting league size mismatch");
+  import_strict2.default.equal(await db.redraftRoster.count({ where: { seasonId } }), initialTeams, "Roster count mismatch");
   const history = await readLineupHistory2(db, leagueId, seasonId, /* @__PURE__ */ new Date());
   import_strict2.default.equal(history.legacyBaseline, false);
-  import_strict2.default.ok(history.events.length >= 16);
-  const state = checkpoint.sports[sport] ||= { cuts: {}, waivers: {}, firstWeek: target.firstWeek, season };
+  import_strict2.default.ok(history.events.length >= initialTeams * 2);
+  const state = checkpoint.sports[stateKey] ||= { cuts: {}, waivers: {}, firstWeek: target.firstWeek, season };
   if (state.complete) return;
   const rules = await getGuillotineConfig2(leagueId);
   import_strict2.default.ok(rules);
@@ -20096,7 +20136,7 @@ async function checkSport(sport, target, refresh) {
   const periods = [...new Set(cuts.map((c) => c.scoringPeriod))];
   for (const period of periods) {
     const eliminated = cuts.filter((c) => c.scoringPeriod === period);
-    const before = 8 - cuts.filter((c) => c.scoringPeriod < period).length;
+    const before = initialTeams - cuts.filter((c) => c.scoringPeriod < period).length;
     const expected = Math.min(rules.eliminationsByWeek?.[period] ?? rules.teamsPerChop, before - 1);
     const survival = await db.guillotineSurvivalLog.findMany({ where: { leagueId, scoringPeriod: period } });
     const safe = survival.filter((x) => x.survivalStatus === "survived");
@@ -20141,6 +20181,7 @@ async function checkSport(sport, target, refresh) {
   if (survivors.length === 1) {
     const finalLeague = await db.league.findUniqueOrThrow({ where: { id: leagueId } });
     verifyCompletion({
+      initialTeams,
       eliminated: cuts.length,
       survivors: survivors.length,
       complete: (await db.redraftSeason.findUniqueOrThrow({ where: { id: seasonId } })).status === "complete",
@@ -20183,9 +20224,9 @@ async function tick() {
     }
     const refresh = Date.now() - checkpoint.lastFeedAt >= 36e5;
     const failures = [];
-    for (const [sport, target] of Object.entries(forward_fixture_default.leagues)) {
+    for (const [sport, target] of Object.entries(guilly_hosted_fixture_default.leagues)) {
       try {
-        await checkSport(sport, target, refresh);
+        await checkSport(target.sport || sport, target, refresh, sport);
       } catch (error) {
         const message = safeError(error);
         failures.push({ sport, message });
@@ -20201,7 +20242,7 @@ async function tick() {
     if (refresh && !failures.length) checkpoint.lastFeedAt = Date.now();
     checkpoint.lastTick = (/* @__PURE__ */ new Date()).toISOString();
     checkpoint.failures = failures;
-    const complete = Object.keys(checkpoint.sports).length === 4 && Object.values(checkpoint.sports).every((s) => s.complete);
+    const complete = Object.keys(guilly_hosted_fixture_default.leagues).every((key) => checkpoint.sports[key]?.complete);
     if (complete) await alert("all four sports validated", "NFL, NBA, NHL and MLB have live evidence of automatic cuts, double chop weeks, survivor waivers and one winner. Validation is complete.");
     await save();
     lastError = failures.length ? "validation_failure" : null;
